@@ -39,6 +39,19 @@ The installer copies CrossOver's own `lib/dxmt/x86_64-windows/d3d11.dll` and rep
 
 In CrossOver 26.0 (DXMT `v0.72-25-gf35d839`) these are at file offsets `0xE9188`, `0xE9194`, `0xF7578` and `0xF7584`. The installer also zeroes the 16-byte `Wine builtin DLL` marker at offset `0x40`, so Wine treats the copy as a native DLL.
 
+CrossOver 27 (DXMT `v0.80-279-g8f06be3`, also in CrossOver Preview) is compiled differently: both checks sit in `OMSetRenderTargetsAndUnorderedAccessViews`, once for the immediate and once for the deferred context, inside a loop that carries the last render target's size forward. Nothing takes the smaller size afterwards, so dropping the checks would leave the render area at the render target's size. Instead each 18-byte check becomes a call to a few bytes in the zero padding at the end of `.text` that load the render target's size and clamp it to the depth-stencil view's (`cmova`), and `.text`'s VirtualSize grows to cover them:
+
+```
+44 8B 40 2C     mov  r8d, [rax+2Ch]      ; render target width
+45 39 C2        cmp  r10d, r8d
+72 ??           jb   invalid             ; -> call clamp (mov, cmp, cmova r8d, r10d,
+44 8B 48 30     mov  r9d, [rax+30h]      ;    mov, cmp, cmova r9d, r11d, ret)
+45 39 CB        cmp  r11d, r9d           ;    padded with nops
+72 ??           jb   invalid
+```
+
+The deferred context's copy uses `r11`, `ecx`, `r8d`, `r9d` and `r10d`. In this build the checks are at file offsets `0x120206` and `0x13F9BA`. Tested with the Lighting Engine 0.9.50.1 through CrossOver 27.0.0.41069's Wine (via NotProton) on an M1 Pro: no `invalid render targets` in the log and a fully lit world.
+
 The copy goes into the bottle's `C:\windows\system32\d3d11.dll`, with the override `d3d11=native,builtin` for `DarkSoulsII.exe`. It has to be `system32`: the mod's ReShade hooks only `C:\windows\system32\d3d11.dll`, and a DLL in the game folder is ignored. CrossOver.app itself can't be modified, because macOS App Management protects it. `WINEDLLPATH` and `DllPath` don't override Wine's builtin DLLs.
 
 The patched DLL still talks to CrossOver's own `winemetal`, so it has to come from the same CrossOver version. If CrossOver updates and the game turns black again, run the installer again. If the pattern isn't found any more, the new DXMT was compiled differently. Then look at the same function in that DXMT version, or check whether it has started accepting these targets.

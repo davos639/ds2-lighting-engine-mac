@@ -463,7 +463,8 @@ func displaySize(_ args: [String]) -> Never {
 //   8B 40 10        mov eax, [rax+10h]     ; RTV height
 //   41 39 C4        cmp r12d, eax
 //   0F 82 ?? ?? 00 00  jb invalid          ; <- NOP
-// After that DXMT already renders into the smaller of the two sizes. The "Wine builtin DLL" marker
+// After that DXMT already renders into the smaller of the two sizes (DXMT v0.72, CrossOver 26).
+// DXMT v0.80 (CrossOver 27) has no such step, see clampChecksV080. The "Wine builtin DLL" marker
 // is cleared so Wine loads the copy as a native DLL.
 func patchD3D11(_ args: [String]) -> Never {
   guard args.count == 2 else { fail("usage: ds2mac patch-d3d11 <in.dll> <out.dll>", code: 2) }
@@ -488,11 +489,16 @@ func patchD3D11(_ args: [String]) -> Never {
     if matches(at: i, pattern) { found.append(i) } else if matches(at: i, patchedPattern) { already.append(i) }
   }
   if found.isEmpty && already.count == 2 { fail("\(args[0]) is already patched", code: 3) }
-  guard found.count == 2 else {
+  var offsets: [String]
+  if found.count == 2 {
+    for i in found { for j in jumps { bytes.replaceSubrange((i + j)..<(i + j + 6), with: nop6) } }
+    offsets = found.flatMap { i in jumps.map { String(format: "0x%X", i + $0) } }
+  } else if let clamped = clampChecksV080(&bytes, args[0]) {
+    offsets = clamped
+  } else {
     fail("expected 2 render-target size checks in \(args[0]), found \(found.count). "
       + "This DXMT build is not supported", code: 4)
   }
-  for i in found { for j in jumps { bytes.replaceSubrange((i + j)..<(i + j + 6), with: nop6) } }
 
   let marker = Array("Wine builtin DLL".utf8)
   if let m = (0..<min(0x400, bytes.count - marker.count)).first(where: {
@@ -506,9 +512,71 @@ func patchD3D11(_ args: [String]) -> Never {
   do { try out.write(to: URL(fileURLWithPath: args[1]), options: .atomic) } catch {
     fail("cannot write \(args[1]): \(error)")
   }
-  let offsets = found.flatMap { i in jumps.map { String(format: "0x%X", i + $0) } }
   log("patched \(offsets.joined(separator: ", ")); sha256 \(sha256(out))")
   exit(0)
+}
+
+// DXMT v0.80 checks each render target in a loop and carries the last one's size forward, without
+// taking the smaller one, so the checks can't simply be dropped. Each check (immediate and deferred
+// context) becomes a call to a few bytes in the slack at the end of .text that clamp the size to
+// the depth-stencil view's instead. Immediate context (the deferred one uses r11, ecx, r8d-r10d):
+//   44 8B 40 2C     mov r8d, [rax+2Ch]   ; RTV width
+//   45 39 C2        cmp r10d, r8d
+//   72 ??           jb invalid           ; -> mov, cmp, cmova r8d, r10d in the cave
+//   44 8B 48 30     mov r9d, [rax+30h]   ; RTV height
+//   45 39 CB        cmp r11d, r9d
+//   72 ??           jb invalid           ; -> mov, cmp, cmova r9d, r11d, ret
+// Returns nil if this isn't that build, the patched offsets otherwise; exits if already patched.
+func clampChecksV080(_ bytes: inout [UInt8], _ path: String) -> [String]? {
+  func hex(_ s: String) -> [UInt8?] {
+    let h = Array(s.filter { $0 != " " })
+    return stride(from: 0, to: h.count, by: 2).map { h[$0] == "?" ? nil : UInt8(String(h[$0..<($0 + 2)]), radix: 16)! }
+  }
+  // (check, clamp) for the immediate and the deferred context
+  let sites: [([UInt8?], [UInt8])] = [
+    (hex("448B402C 4539C2 72?? 448B4830 4539CB 72??"),
+     hex("448B402C 4539D0 450F47C2 448B4830 4539D9 450F47CB C3").map { $0! }),
+    (hex("418B4B2C 4139C8 72?? 458B4B30 4539CA 72??"),
+     hex("418B4B2C 4439C1 410F47C8 458B4B30 4539D1 450F47CA C3").map { $0! }),
+  ]
+  let call = hex("E8???????? 0F1F440000 0F1F4000 0F1F00 90")
+  func find(_ p: [UInt8?]) -> [Int] {
+    (0..<max(0, bytes.count - p.count + 1)).filter { i in
+      p.enumerated().allSatisfy { $0.element == nil || bytes[i + $0.offset] == $0.element! }
+    }
+  }
+  let hits = sites.map { find($0.0) }
+  if hits.allSatisfy(\.isEmpty) {
+    if find(call).count == 2 { fail("\(path) is already patched", code: 3) }
+    return nil
+  }
+  guard hits.allSatisfy({ $0.count == 1 }) else { return nil }
+
+  func u16(_ o: Int) -> Int { Int(bytes[o]) | Int(bytes[o + 1]) << 8 }
+  func u32(_ o: Int) -> Int { u16(o) | u16(o + 2) << 16 }
+  let pe = u32(0x3C)
+  let sec = pe + 24 + u16(pe + 20)
+  guard Array(bytes[sec..<(sec + 6)]) == Array(".text\0".utf8) else { return nil }
+  let (vsize, va, rsize, raw) = (u32(sec + 8), u32(sec + 12), u32(sec + 16), u32(sec + 20))
+  var cave = (va + vsize + 15) & ~15  // RVA
+  var offsets: [String] = []
+  for (k, (check, clamp)) in sites.enumerated() {
+    let site = hits[k][0]
+    let file = raw + cave - va
+    guard cave - va + clamp.count <= rsize, bytes[file..<(file + clamp.count)].allSatisfy({ $0 == 0 }) else {
+      return nil
+    }
+    bytes.replaceSubrange(file..<(file + clamp.count), with: clamp)
+    let rel = UInt32(truncatingIfNeeded: cave - (va + site - raw + 5))
+    let jump = [0xE8] + (0..<4).map { UInt8(truncatingIfNeeded: rel >> (8 * $0)) } + call.dropFirst(5).map { $0! }
+    precondition(jump.count == check.count)
+    bytes.replaceSubrange(site..<(site + check.count), with: jump)
+    offsets.append(String(format: "0x%X", site))
+    cave = (cave + clamp.count + 15) & ~15
+  }
+  let newSize = UInt32(cave - va)  // .text VirtualSize now covers the clamps
+  for k in 0..<4 { bytes[sec + 8 + k] = UInt8(truncatingIfNeeded: newSize >> (8 * k)) }
+  return offsets
 }
 
 // MARK: - graphics-config
