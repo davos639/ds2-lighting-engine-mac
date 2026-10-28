@@ -11,7 +11,7 @@ One Terminal command sets up your CrossOver bottle and adds a **DS2 Lighting Eng
 | | Tested with |
 |---|---|
 | A Mac with Apple Silicon (M1 or newer), macOS 14 or newer | MacBook Pro 14" M5 Pro, macOS 27.2 |
-| [CrossOver](https://www.codeweavers.com/crossover) 26 or newer (paid, 14-day free trial) | CrossOver 26.0 |
+| [CrossOver](https://www.codeweavers.com/crossover) 26 or newer (paid, 14-day free trial) | CrossOver 26.0 (27.0 Preview: the DXMT patch only) |
 | Dark Souls II: Scholar of the First Sin (Steam), installed in a CrossOver bottle | |
 | DS2 Lighting Engine by Ganaboy, downloaded by you from Nexus Mods | 0.9.50.1 (the regular version, not Path Tracing) |
 
@@ -103,6 +103,7 @@ The launcher writes a log to `~/Library/Application Support/ds2le-mac/launch.log
 - **The game sits at a small window, or a black screen, and doesn't load.** Dark Souls II waits until its window is active. Click it, or switch to it with Cmd+Tab. A black screen that stays also happens when the mod's flip model meets the game's own fullscreen mode, for example after starting the game from Steam with fullscreen turned on in its options. The launcher always starts it windowed.
 - **Thin white lines at the right and bottom edge.** Wine paints the window before the game's first frame. They usually go away by themselves; if not, switch to another window and back.
 - **Black 3D world, only the menus and HUD visible.** CrossOver was probably updated and replaced DXMT. Run the installer again. If it says this DXMT can't be patched, the new DXMT build differs from the one this was made for, see [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#2-the-patched-d3d11dll).
+- **The game crashes at startup with an assertion about `has_rt_entry` (`light_accumulation.cpp`).** The mod finds its shadow maps by their size. DS2 ModEngine's `[rendering]` shadow-resolution settings change those sizes, so the mod can't find them. In `modengine.ini`, comment out the `*ShadowResolution=` lines (put `;` in front) and start again.
 - **The game quits by itself.** Don't change display settings or plug in a display while the game runs. Any change of the game's buffer size crashes the mod.
 - **Grass shimmers.** Press fn+F1 in the game for the mod's menu. Under *Shading/Quality/Performance*, MSAA 2x or 4x smooths the grass a lot, at a cost in fps.
 - **Below 60 fps, or the controls feel slow.** When the GPU can't keep up, frames queue up and every queued frame adds about 17 ms of input lag. In the mod's menu (fn+F1, *User settings*), lower the DLSS quality one step, or its heaviest effects: MSAA, global illumination, screen-space reflections, shadow filtering, volumetric fog. Then press *Save*. A wired controller also responds more steadily than Bluetooth.
@@ -118,7 +119,7 @@ The launcher writes a log to `~/Library/Application Support/ds2le-mac/launch.log
 - **Other builds of `DarkSoulsII.exe`.** The changes to the window-size list and the frame limiter were tried on one build of the game and haven't been checked against the current Steam build. Both are found by their byte patterns; if your build differs, the launcher notices and leaves that part alone.
 - **Upscaling on base M-series chips and MacBook Airs.** Upscaling works on the M5 Pro, but nobody has measured how much it helps on smaller GPUs, so the DLSS levels the installer picks are guesses.
 - **A mod download without a settings file.** If the mod's archive has no `ds2le_user_settings.ini`, the installer creates one with only its three settings and the mod uses its defaults for the rest. Install and uninstall were tested that way, but not a game start with such a file.
-- **CrossOver versions other than 26.0** and newer versions of the mod.
+- **CrossOver versions other than 26.0** and newer versions of the mod. For CrossOver 27 only the DXMT patch was tried, not the installer and launcher.
 
 ## How it works
 
